@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>自製極簡番茄鐘</title>
+    <title>Tomato Clock</title>
     <style>
         :root {
             --work-color: #ff5b5b;
@@ -57,7 +57,6 @@
         #startBtn { background-color: var(--current-color); color: white; }
         #resetBtn { background-color: #e0e0e0; color: #555; }
         
-        /* 歷史紀錄區塊 */
         .history-container {
             width: 100%; max-width: 400px; background: white; margin-top: 20px;
             padding: 20px; border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.05);
@@ -65,32 +64,24 @@
         }
         .history-title {
             display: flex; justify-content: space-between; align-items: center;
-            font-size: 1.2rem; font-weight: bold; color: #444; margin-bottom: 15px;
+            font-size: 1.2rem; font-weight: bold; color: #444; margin-bottom: 5px;
         }
-        .clear-btn {
-            background: none; border: none; color: #999; cursor: pointer; font-size: 0.9rem;
+        /* 累積時間專用樣式 */
+        .total-focus-box {
+            background-color: #fff5f5; color: var(--work-color); padding: 8px 14px;
+            border-radius: 12px; font-size: 0.95rem; font-weight: bold; text-align: left;
+            margin-bottom: 15px; border: 1px dashed #ffc9c9;
         }
+        .clear-btn { background: none; border: none; color: #999; cursor: pointer; font-size: 0.9rem; }
         .clear-btn:hover { color: #ff5b5b; }
-        .history-list {
-            max-height: 180px; overflow-y: auto; text-align: left; padding: 0; margin: 0;
-            list-style: none;
-        }
-        .history-item {
-            display: flex; justify-content: space-between; padding: 10px 0;
-            border-bottom: 1px solid #f0f0f0; font-size: 0.95rem; color: #666;
-        }
-        .tag {
-            padding: 2px 8px; border-radius: 4px; color: white; font-size: 0.8rem; font-weight: bold;
-        }
+        .history-list { max-height: 180px; overflow-y: auto; text-align: left; padding: 0; margin: 0; list-style: none; }
+        .history-item { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f0f0f0; font-size: 0.95rem; color: #666; }
+        .tag { padding: 2px 8px; border-radius: 4px; color: white; font-size: 0.8rem; font-weight: bold; }
         .tag-work { background-color: var(--work-color); }
         .tag-break { background-color: var(--break-color); }
     </style>
 </head>
 <body>
-
-<audio id="alarmAudio" loop preload="auto">
-    <source src="https://assets.mixkit.co/active_storage/sfx/911/911-200.mp3" type="audio/mp3">
-</audio>
 
 <div class="container">
     <h1 id="statusLabel">專注時間</h1>
@@ -114,27 +105,32 @@
         <span>今日統計紀錄</span>
         <button class="clear-btn" onclick="clearHistory()">清除紀錄</button>
     </div>
-    <ul class="history-list" id="historyList">
-        </ul>
+    
+    <div class="total-focus-box" id="totalFocusBox">
+        累積專注時間：0 秒
+    </div>
+
+    <ul class="history-list" id="historyList"></ul>
 </div>
 
 <script>
     let isWorking = true; 
     let timerId = null;
     let isRinging = false;
+    let alarmIntervalId = null;
 
-    // --- 測試小秘訣：你可以把 25*60 改成 5，就能快速測試 5 秒後的響鈴與紀錄功能 ---
+    // --- 測試模式：5秒。測試成功後，請將兩個數值都改回 25 * 60 與 5 * 60 ---
     const WORK_TIME = 25 * 60; 
     const BREAK_TIME = 5 * 60; 
     let timeLeft = WORK_TIME;
     let totalTime = WORK_TIME;
 
+    let audioCtx = null;
+
     const circle = document.getElementById('progress');
     const radius = circle.r.baseVal.value;
     const circumference = radius * 2 * Math.PI;
     circle.style.strokeDasharray = `${circumference} ${circumference}`;
-
-    const alarmAudio = document.getElementById('alarmAudio');
 
     function setProgress(percent) {
         const offset = circumference - (percent / 100) * circumference;
@@ -149,10 +145,38 @@
         setProgress(percent);
     }
 
+    function initAudio() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const buffer = audioCtx.createBuffer(1, 1, 22050);
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+            source.start(0);
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+    }
+
+    function playBeep() {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime); 
+        gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+    }
+
     function toggleTimer() {
         const btn = document.getElementById('startBtn');
-        
-        // 如果現在正在響鈴，點擊這個按鈕就會變成「關閉鬧鐘並切換下個階段」
+        initAudio();
+
         if (isRinging) {
             stopAlarmAndSwitch();
             return;
@@ -163,9 +187,6 @@
             timerId = null;
             btn.innerText = "開始";
         } else {
-            // iOS 瀏覽器安全限制：必須在點擊時觸發聲音載入
-            alarmAudio.play().then(() => { alarmAudio.pause(); }).catch(() => {});
-            
             btn.innerText = "暫停";
             timerId = setInterval(() => {
                 if (timeLeft > 0) {
@@ -182,8 +203,7 @@
 
     function resetTimer() {
         if(timerId) { clearInterval(timerId); timerId = null; }
-        alarmAudio.pause();
-        alarmAudio.currentTime = 0;
+        stopAlarmSounds();
         isRinging = false;
         isWorking = true;
         timeLeft = WORK_TIME;
@@ -194,24 +214,27 @@
         updateDisplay();
     }
 
-    // 開始響鈴
     function startAlarm() {
         isRinging = true;
-        alarmAudio.play();
         document.getElementById('startBtn').innerText = "確認關閉響鈴";
-        document.getElementById('statusLabel').innerText = "⏰ 時間到囉！";
+        document.getElementById('statusLabel').innerText = "時間結束";
+        playBeep(); 
+        alarmIntervalId = setInterval(playBeep, 500); 
     }
 
-    // 關閉鬧鐘並記錄時間
+    function stopAlarmSounds() {
+        if (alarmIntervalId) {
+            clearInterval(alarmIntervalId);
+            alarmIntervalId = null;
+        }
+    }
+
     function stopAlarmAndSwitch() {
-        alarmAudio.pause();
-        alarmAudio.currentTime = 0;
+        stopAlarmSounds();
         isRinging = false;
 
-        // 儲存紀錄
-        saveRecord(isWorking ? "工作" : "休息", isWorking ? WORK_TIME : BREAK_TIME);
+        saveRecord(isWorking ? "專注" : "休息", isWorking ? WORK_TIME : BREAK_TIME);
 
-        // 切換下一個階段
         if (isWorking) {
             isWorking = false;
             timeLeft = BREAK_TIME;
@@ -231,46 +254,70 @@
     }
 
     // --- 歷史紀錄邏輯 ---
-    
-    // 儲存至本地端資料庫 (localStorage)
     function saveRecord(type, seconds) {
         const records = JSON.parse(localStorage.getItem('pomodoroRecords') || '[]');
         const now = new Date();
         const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-        const minutes = Math.floor(seconds / 60);
 
-        const newRecord = { type, time: timeStr, duration: minutes };
-        records.unshift(newRecord); // 最新紀錄擺最前面
+        // 為了紀錄更精準，直接把秒數存進資料庫，方便後面做加總計算
+        const newRecord = { type, time: timeStr, rawSeconds: seconds };
+        records.unshift(newRecord);
         localStorage.setItem('pomodoroRecords', JSON.stringify(records));
-        
         renderHistory();
     }
 
-    // 渲染歷史紀錄到網頁畫面上
     function renderHistory() {
         const records = JSON.parse(localStorage.getItem('pomodoroRecords') || '[]');
         const listEl = document.getElementById('historyList');
-        listEl.innerHTML = ''; // 清空舊畫面
+        const totalBox = document.getElementById('totalFocusBox');
+        listEl.innerHTML = '';
+
+        let totalFocusSeconds = 0;
 
         if(records.length === 0) {
             listEl.innerHTML = `<li style="text-align:center; color:#aaa; padding: 20px 0;">目前尚無紀錄</li>`;
+            totalBox.innerText = `累積專注時間：0 秒`;
             return;
         }
 
         records.forEach(item => {
+            // 計算累積專注時間 (只加總 "專注" 標籤)
+            if (item.type === '專注') {
+                totalFocusSeconds += item.rawSeconds;
+            }
+
+            // 單筆時間格式化顯示
+            let durationStr = "";
+            if (item.rawSeconds >= 60) {
+                durationStr = `${Math.floor(item.rawSeconds / 60)} 分鐘`;
+            } else {
+                durationStr = `${item.rawSeconds} 秒`;
+            }
+
             const li = document.createElement('li');
             li.className = 'history-item';
-            const tagClass = item.type === '工作' ? 'tag-work' : 'tag-break';
+            const tagClass = item.type === '專注' ? 'tag-work' : 'tag-break';
             
             li.innerHTML = `
                 <div>
                     <span class="tag ${tagClass}">${item.type}</span>
-                    <span style="margin-left: 8px;">完成了 ${item.duration} 分鐘</span>
+                    <span style="margin-left: 8px;">完成了 ${durationStr}</span>
                 </div>
                 <div style="color: #bbb;">${item.time}</div>
             `;
             listEl.appendChild(li);
         });
+
+        // 計算並渲染「累積專注時間」看板
+        if (totalFocusSeconds === 0) {
+            totalBox.innerText = `累積專注時間：0 秒`;
+        } else if (totalFocusSeconds < 60) {
+            totalBox.innerText = `累積專注時間：${totalFocusSeconds} 秒`;
+        } else {
+            const totalMins = Math.floor(totalFocusSeconds / 60);
+            const totalSecs = totalFocusSeconds % 60;
+            totalBox.innerText = `累積專注時間：${totalMins} 分 ${totalSecs} 秒`;
+        }
     }
 
     function clearHistory() {
@@ -280,7 +327,6 @@
         }
     }
 
-    // 初始化讀取歷史紀錄
     renderHistory();
     updateDisplay();
 </script>
